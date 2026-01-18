@@ -294,7 +294,7 @@ if not st.session_state['logged_in']:
     with c2:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.markdown('<div class="holo-container">', unsafe_allow_html=True)
-        st.markdown('<h1 style="color:white; font-family: Rajdhani; letter-spacing: 3px;">STARBANK OS</h1>', unsafe_allow_html=True)
+        st.markdown('<h1 style="color:white; font-family: Rajdhani; letter-spacing: 3px;">STARBANK</h1>', unsafe_allow_html=True)
         st.markdown('<p style="color:#00d4ff;">/// Acesso Seguro v8.0 ///</p>', unsafe_allow_html=True)
         
         tab1, tab2 = st.tabs(["ENTRAR", "REGISTRAR"])
