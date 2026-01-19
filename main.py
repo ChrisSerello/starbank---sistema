@@ -5,7 +5,7 @@ import hashlib
 import time
 from datetime import date, timedelta
 
-
+#Config. da pagina
 st.set_page_config(
     page_title="Starbank Vendas",
     page_icon="💠",
@@ -13,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-
+#css cyber
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Inter:wght@300;400;600&display=swap');
@@ -95,7 +95,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- FUNÇÕES DE BANCO DE DADOS (SQLite) ---
+#banco de dados
 def init_connection():
     return sqlite3.connect('vendas.db', check_same_thread=False)
 
@@ -114,8 +114,6 @@ def run_query(query, params=None):
 def init_db():
     conn = init_connection()
     c = conn.cursor()
-    
-    #criandoi tabela de vendas se n existe
     c.execute('''CREATE TABLE IF NOT EXISTS vendas (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT,
@@ -124,40 +122,27 @@ def init_db():
                     convenio TEXT,
                     produto TEXT,
                     valor REAL)''')
-    
-    # cria tabeka usuarios se não existe
     c.execute('''CREATE TABLE IF NOT EXISTS users (
                     username TEXT PRIMARY KEY, 
                     password TEXT)''')
-    
-    #
-    #cria a tabela de role se o banco estiver antigo
     try:
         c.execute("ALTER TABLE users ADD COLUMN role TEXT")
-        # Se deu certo adicionar, define todos os usuários antigos como 'operador'
         c.execute("UPDATE users SET role = 'operador' WHERE role IS NULL")
         conn.commit()
-    except sqlite3.OperationalError:
-        # Se der erro, é pq a coluna já existe. Segue o jogo.
-        pass
+    except sqlite3.OperationalError: pass
 
-    # 4. Cria supervisores padrão
     supervisores = ["Maicon Nascimento", "Brunno Leonard", "Fernanda Gomes", "Nair Oliveira"]
     senha_padrao = hashlib.sha256(str.encode("123456")).hexdigest()
-    
     for chefe in supervisores:
         try:
-            # Tenta inserir. Se já existe, atualiza o cargo para admin para garantir
             c.execute('INSERT OR IGNORE INTO users(username, password, role) VALUES (?,?,?)', 
                       (chefe, senha_padrao, 'admin'))
             c.execute('UPDATE users SET role = ? WHERE username = ?', ('admin', chefe))
-        except Exception:
-            pass
-            
+        except Exception: pass
     conn.commit()
     conn.close()
 
-# --- SEGURANÇA E UTILITÁRIOS ---
+#segurança
 def make_hashes(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
@@ -168,22 +153,33 @@ def generate_session_token(username):
 def update_password(username, new_password):
     run_query("UPDATE users SET password = ? WHERE username = ?", (make_hashes(new_password), username))
 
-# --- LÓGICA DE NEGÓCIO ---
+# logica de metas e comissões
 def calcular_comissao_tier(total):
-    if total >= 150000: return total * 0.0150 # 1.50%
-    elif total >= 101000: return total * 0.0125 # 1.25%
-    elif total >= 80000: return total * 0.0100 # 1.00%
-    elif total >= 50000: return total * 0.0050 # 0.50%
+    # A partir de 150k -> 1.50%
+    if total >= 150000: return total * 0.0150 
+    # A partir de 101k -> 1.25%
+    elif total >= 101000: return total * 0.0125 
+    # A partir de 80k -> 1.00%
+    elif total >= 80000: return total * 0.0100 
+    # A partir de 50k -> 0.50%
+    elif total >= 50000: return total * 0.0050 
     else: return 0.0
 
-def get_motivational_data(total, meta):
-    if meta == 0: percent = 0 
-    else: percent = total / meta
-    if percent < 0.2: return "BRONZE", "#cd7f32", "Início de jornada. Foco total!", "🥉"
-    elif percent < 0.5: return "PRATA", "#C0C0C0", "Ritmo consistente. Continue!", "⛓️"
-    elif percent < 0.8: return "OURO", "#FFD700", "Alta performance! A meta está próxima!", "🥇"
-    elif percent < 1.0: return "PLATINA", "#E5E4E2", "Excelência pura! Quase lá!", "💠"
-    else: return "DIAMANTE", "#b9f2ff", "LENDÁRIO! Você zerou o jogo!", "💎"
+def definir_meta_atual(total):
+    #definhe qual barra o operador esta 
+    if total < 50000: return 50000.00
+    elif total < 80000: return 80000.00
+    elif total < 101000: return 101000.00
+    elif total < 150000: return 150000.00
+    else: return 200000.00 # Meta simbólica "Sem Limites" para o gráfico não quebrar
+
+def get_motivational_data(total):
+    # de acordo com a tabela de comissão
+    if total >= 150000: return "DIAMANTE (MAX)", "#b9f2ff", "LENDÁRIO! COMISSÃO MÁXIMA DE 1.5%", "💎"
+    elif total >= 101000: return "PLATINA", "#E5E4E2", "EXCELENTE! COMISSÃO DE 1.25%", "💠"
+    elif total >= 80000: return "OURO", "#FFD700", "MUITO BEM! COMISSÃO DE 1.00%", "🥇"
+    elif total >= 50000: return "PRATA", "#C0C0C0", "COMISSÃO ATIVADA (0.50%)!", "⛓️"
+    else: return "BRONZE", "#cd7f32", "Acelere para ativar a comissão nos 50k!", "🥉"
 
 def get_streak(username):
     res = run_query("SELECT DISTINCT data FROM vendas WHERE username = ? ORDER BY data DESC", (username,))
@@ -201,7 +197,7 @@ def get_global_ticker_data():
     for row in res:
         user_short = row[0].split()[0]
         msgs.append(f"⚡ LIVE: {user_short.upper()} VENDEU R$ {row[1]:,.2f} ({row[2]})")
-    msgs.append("🚀 FOCO NA META: R$ 50k")
+    msgs.append("🚀 FOCO NA PRÓXIMA META!")
     return msgs
 
 def login_user(username, password):
@@ -231,14 +227,13 @@ def get_vendas_df(target_user=None):
     conn.close()
     return df
 
-# --- INICIALIZAÇÃO ---
+#iniciando login 
 init_db()
 
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
     st.session_state['username'] = ''
 
-# Recuperação de sessão via URL
 qp = st.query_params
 if not st.session_state['logged_in'] and "user" in qp and "token" in qp:
     if qp["token"] == generate_session_token(qp["user"]):
@@ -277,7 +272,7 @@ if not st.session_state['logged_in']:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.markdown('<div class="holo-container">', unsafe_allow_html=True)
         st.markdown('<h1 style="color:white; font-family: Rajdhani; letter-spacing: 3px;">STARBANK</h1>', unsafe_allow_html=True)
-        st.markdown('<p style="color:#00d4ff;">/// Acesso Seguro v9.0 ///</p>', unsafe_allow_html=True)
+        st.markdown('<p style="color:#00d4ff;">/// Acesso Seguro v10.0 ///</p>', unsafe_allow_html=True)
         
         tab1, tab2 = st.tabs(["ENTRAR", "REGISTRAR"])
         with tab1:
@@ -288,7 +283,6 @@ if not st.session_state['logged_in']:
                 if res:
                     st.session_state['logged_in'] = True
                     st.session_state['username'] = u
-                    # Garante que lê a role com segurança, se for None, assume operador
                     st.session_state['role'] = res[0][2] if res[0][2] else 'operador'
                     st.query_params["user"] = u
                     st.query_params["token"] = generate_session_token(u)
@@ -307,15 +301,12 @@ else:
     user = st.session_state['username']
     role = st.session_state['role']
 
-    # TICKER LÓGICA
+    # TICKER
     if 'last_sales_count' not in st.session_state: st.session_state['last_sales_count'] = 0
     current_sales_count = get_total_sales_count()
     if current_sales_count > st.session_state['last_sales_count']:
         ticker_msgs = get_global_ticker_data()
-        ticker_html = f"""
-        <div class="ticker-wrap"><div class="ticker">
-            {' &nbsp;&nbsp;&nbsp;&nbsp; /// &nbsp;&nbsp;&nbsp;&nbsp; '.join([f'<div class="ticker__item">{m}</div>' for m in ticker_msgs])}
-        </div></div>"""
+        ticker_html = f"""<div class="ticker-wrap"><div class="ticker">{' &nbsp;&nbsp;&nbsp;&nbsp; /// &nbsp;&nbsp;&nbsp;&nbsp; '.join([f'<div class="ticker__item">{m}</div>' for m in ticker_msgs])}</div></div>"""
         st.markdown(ticker_html, unsafe_allow_html=True)
         st.session_state['last_sales_count'] = current_sales_count
 
@@ -323,24 +314,17 @@ else:
     with st.sidebar:
         st.markdown(f"<h2 style='color: #00d4ff;'>👤 {user.upper()}</h2>", unsafe_allow_html=True)
         st.caption(f"PERFIL: {role.upper()}")
-        
         menu = st.radio("NAVEGAÇÃO", ["Painel de Controle", "Segurança / Senha"])
         st.divider()
-        
         streak_count = get_streak(user)
         fire_color = "#FF4500" if streak_count > 0 else "#555"
-        st.markdown(f"""
-            <div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; border: 1px solid {fire_color}; margin-bottom: 20px;">
-                <h3 style="margin:0; color: {fire_color}; text-align: center;">🔥 DIAS ATIVOS: {streak_count}</h3>
-            </div>
-        """, unsafe_allow_html=True)
-
+        st.markdown(f"""<div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; border: 1px solid {fire_color}; margin-bottom: 20px;"><h3 style="margin:0; color: {fire_color}; text-align: center;">🔥 DIAS ATIVOS: {streak_count}</h3></div>""", unsafe_allow_html=True)
         if st.button("DESCONECTAR [X]"):
             st.session_state['logged_in'] = False
             st.query_params.clear()
             st.rerun()
 
-    # --- PÁGINA: ALTERAR SENHA ---
+    # --- MENU: SEGURANÇA ---
     if menu == "Segurança / Senha":
         st.title("🔐 Atualização de Credenciais")
         with st.form("senha_form"):
@@ -349,13 +333,11 @@ else:
             if st.form_submit_button("Atualizar Chave"):
                 if s1 == s2 and s1 != "":
                     update_password(user, s1)
-                    st.success("Senha atualizada com sucesso!")
-                else:
-                    st.error("Senhas não coincidem ou vazias.")
+                    st.success("Senha atualizada!")
+                else: st.error("Senhas não coincidem.")
 
-    # --- PÁGINA: PAINEL DE CONTROLE ---
+    # --- MENU: PAINEL DE CONTROLE ---
     elif menu == "Painel de Controle":
-        # Inputs Nova Venda na Lateral
         with st.sidebar:
             st.divider()
             st.markdown("### 💠 NOVA TRANSAÇÃO")
@@ -371,7 +353,6 @@ else:
                     time.sleep(0.5)
                     st.rerun()
 
-        # Filtros de Visualização
         filtro = user
         if role == 'admin':
             col_admin, _ = st.columns([1, 3])
@@ -381,35 +362,39 @@ else:
                 filtro = "Todos" if sel == "Todos" else sel
 
         df = get_vendas_df(filtro)
-        META = 50000.00
         
-        if not df.empty:
-            total = df['valor'].sum()
-        else:
-            total = 0.0
-            
+        # --- CÁLCULOS DINÂMICOS ---
+        total = df['valor'].sum() if not df.empty else 0.0
+        
+        # Define a META VISUAL baseado no total vendido (Gamification)
+        META_ATUAL = definir_meta_atual(total)
+        
         comissao = calcular_comissao_tier(total)
-        nivel, cor_nivel, msg, icone = get_motivational_data(total, META)
+        nivel, cor_nivel, msg, icone = get_motivational_data(total)
 
+        # Banner
         st.markdown(f"""
             <div class="cyber-banner" style="border-color: {cor_nivel}; box-shadow: 0 0 20px {cor_nivel}40;">
                 <h2 style="margin:0; color: white; letter-spacing: 2px;">{icone} STATUS: {filtro.upper()}</h2>
                 <p style="margin:10px 0 0 0; color: {cor_nivel}; font-size: 1.3em; font-weight: bold; text-shadow: 0 0 10px {cor_nivel};">
-                    NÍVEL ATUAL: {nivel}
+                    NÍVEL: {nivel}
                 </p>
                 <p style="margin:0; color: #a0a0a0; font-style: italic;">/// {msg} ///</p>
             </div>
         """, unsafe_allow_html=True)
 
+        #barra de progresso de acordo com a meta
         col_prog, col_meta = st.columns([3, 1])
         with col_prog:
-            st.markdown(f"<br>Please **PROGRESSO DA MISSÃO ({min(total/META*100, 100):.1f}%)**", unsafe_allow_html=True)
-            st.progress(min(total/META, 1.0))
+            progresso_pct = min(total / META_ATUAL, 1.0)
+            st.markdown(f"<br>Please **PRÓXIMO ALVO: R$ {META_ATUAL:,.2f} ({progresso_pct*100:.1f}%)**", unsafe_allow_html=True)
+            st.progress(progresso_pct)
         with col_meta:
             st.markdown("<br>", unsafe_allow_html=True)
-            if total >= META: st.markdown("🏆 **META BATIDA!**")
+            if total >= 150000: st.markdown("🏆 **LENDÁRIO!**")
+            elif total >= META_ATUAL: st.markdown("🚀 **SUBIU DE NÍVEL!**")
 
-        if total >= META and filtro == user: st.balloons()
+        if total >= META_ATUAL and filtro == user and total < 200000: st.balloons()
 
         st.markdown("<br>", unsafe_allow_html=True)
         k1, k2, k3, k4 = st.columns(4)
@@ -418,8 +403,9 @@ else:
         perc_atual = (comissao/total*100) if total > 0 else 0
         k2.metric("COMISSÃO APLICADA", f"R$ {comissao:,.2f}", delta=f"{perc_atual:.2f}%")
         
-        k3.metric("ALVO RESTANTE", f"R$ {max(META-total, 0):,.2f}", delta="Pendente", delta_color="inverse")
-        k4.metric("META MENSAL", f"R$ {META:,.2f}", delta="Fixo")
+        # Mostra quanto falta para a PRÓXIMA meta da escada
+        k3.metric("FALTA P/ PRÓX. NÍVEL", f"R$ {max(META_ATUAL-total, 0):,.2f}", delta="Pendente", delta_color="inverse")
+        k4.metric("META ATUAL", f"R$ {META_ATUAL:,.2f}", delta="Alvo Dinâmico")
 
         st.divider()
 
