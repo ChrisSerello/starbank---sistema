@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import psycopg2
-import hashlib
 import time
 from datetime import date
+from supabase import create_client, Client
 
 # Config. da pagina
 st.set_page_config(
@@ -13,90 +13,45 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CSS CYBER (Mantido) ---
+# --- CSS CYBER ---
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Inter:wght@300;400;600&display=swap');
         .stAppDeployButton { display: none; }
         header[data-testid="stHeader"] { background-color: transparent !important; }
-        button[kind="header"] { color: #00d4ff !important; }
-        [data-testid="collapsedControl"] { color: #00d4ff !important; }
         html, body, [class*="css"] { font-family: 'Rajdhani', sans-serif; }
         
-        /* --- TICKER (LIVE) --- */
-        .ticker-wrap {
-            width: 100%; overflow: hidden; background-color: rgba(0, 0, 0, 0.6);
-            border-bottom: 1px solid #00d4ff; border-top: 1px solid #00d4ff;
-            padding: 10px 0; white-space: nowrap; box-sizing: border-box; margin-bottom: 20px;
-        }
+        /* TICKER */
+        .ticker-wrap { width: 100%; overflow: hidden; background-color: rgba(0, 0, 0, 0.6); border-y: 1px solid #00d4ff; padding: 10px 0; margin-bottom: 20px; }
         .ticker { display: inline-block; padding-left: 100%; animation: ticker-anim 30s linear infinite; } 
-        .ticker__item {
-            display: inline-block; padding: 0 2rem; font-size: 1.2rem;
-            color: #FFFFFF; font-weight: bold; text-shadow: 0 0 5px #00ff41;
-        }
+        .ticker__item { display: inline-block; padding: 0 2rem; font-size: 1.2rem; color: #FFFFFF; font-weight: bold; text-shadow: 0 0 5px #00ff41; }
         @keyframes ticker-anim { 0% { transform: translate3d(0, 0, 0); } 100% { transform: translate3d(-100%, 0, 0); } }
 
-        /* --- ANIMAÇÕES --- */
-        @keyframes slideInUp { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-        .cyber-banner { animation: slideInUp 0.6s ease-out both; }
-        .stProgress { animation: slideInUp 0.6s ease-out 0.2s both; }
-        div[data-testid="stMetric"] { animation: slideInUp 0.6s ease-out 0.4s both; }
-        .stChart, .stDataFrame { animation: slideInUp 0.8s ease-out 0.6s both; }
-
-        /*BACKGROUND*/
-        .stApp {
-            background: linear-gradient(to bottom, #02010a, #090a1f);
-            background-size: 200% 200%; animation: darkPulse 10s ease infinite;
-        }
-        @keyframes darkPulse { 0% {background-position: 0% 0%;} 50% {background-position: 0% 100%;} 100% {background-position: 0% 0%;} }
+        /* CARDS E BANNER */
+        .cyber-banner { padding: 20px; border-radius: 12px; background: rgba(10, 10, 30, 0.8); border: 1px solid; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        div[data-testid="stMetric"] { background: rgba(5, 15, 30, 0.7); border: 1px solid rgba(0, 212, 255, 0.2); border-radius: 12px; padding: 20px; }
+        div[data-testid="stMetricLabel"] { color: #00d4ff !important; }
         
-        [data-testid="stSidebar"] {
-            background-color: rgba(10, 10, 20, 0.95);
-            border-right: 1px solid rgba(0, 212, 255, 0.1);
-            backdrop-filter: blur(10px);
-        }
-
-        /* --- CARDS 3D --- */
-        div[data-testid="stMetric"] {
-            background: rgba(5, 15, 30, 0.7);
-            border: 1px solid rgba(0, 212, 255, 0.2);
-            box-shadow: 0 0 20px rgba(0, 212, 255, 0.05);
-            backdrop-filter: blur(15px); border-radius: 12px; padding: 20px;
-            transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.4s ease, border-color 0.4s ease;
-        }
-        div[data-testid="stMetric"]:hover {
-            transform: translateY(-5px);
-            border-color: #00d4ff;
-            box-shadow: 0 10px 25px rgba(0, 212, 255, 0.2);
-            background: rgba(5, 15, 30, 0.9);
-        }
-        div[data-testid="stMetricLabel"] { color: #00d4ff !important; font-weight: 600; letter-spacing: 1px; }
-        div[data-testid="stMetricValue"] { font-family: 'Rajdhani', sans-serif; font-weight: 700; color: white; text-shadow: 0 0 10px rgba(255,255,255,0.3); }
-        
-        .cyber-banner {
-            padding: 20px; border-radius: 12px; background: rgba(10, 10, 30, 0.8);
-            border: 1px solid; position: relative; overflow: hidden;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-        }
-        
-        .stButton > button {
-            background: transparent; border: 1px solid #00d4ff; color: #00d4ff;
-            font-family: 'Rajdhani'; text-transform: uppercase; letter-spacing: 2px; transition: all 0.3s;
-        }
-        .stButton > button:hover {
-            background: rgba(0, 212, 255, 0.2); box-shadow: 0 0 20px rgba(0, 212, 255, 0.4); transform: scale(1.02);
-        }
+        /* LOGIN ESTILIZADO */
+        .holo-container { background: rgba(255, 255, 255, 0.05); border-radius: 20px; padding: 40px; border: 1px solid rgba(0, 212, 255, 0.3); text-align: center; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- CONEXÃO COM O SUPABASE (PostgreSQL) ---
-# Esta função usa st.secrets. Certifique-se de configurar os Secrets no painel do Streamlit.
+# --- CONEXÃO DUPLA (SUPABASE AUTH + POSTGRES DATA) ---
+
+# 1. Cliente Supabase (Para Login/Auth e Criação de Usuários)
 @st.cache_resource
+def init_supabase():
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
+
+supabase = init_supabase()
+
+# 2. Conexão Postgres (Para Banco de Dados de Vendas - Mantemos pela performance de analytics)
 def init_connection():
-    try:
-        return psycopg2.connect(**st.secrets["connections"]["postgresql"])
-    except Exception as e:
-        return None
+    try: return psycopg2.connect(**st.secrets["connections"]["postgresql"])
+    except: return None
 
 def run_query(query, params=None):
     conn = init_connection()
@@ -105,18 +60,13 @@ def run_query(query, params=None):
             with conn.cursor() as cur:
                 cur.execute(query, params)
                 conn.commit()
-                if query.strip().upper().startswith("SELECT"):
-                    return cur.fetchall()
-                return None
-        except Exception as e:
-            st.error(f"Erro de conexão: {e}")
-            return None
-        finally:
-            conn.close()
+                if query.strip().upper().startswith("SELECT"): return cur.fetchall()
+        except Exception as e: st.error(f"Erro DB: {e}")
+        finally: conn.close()
     return None
 
 def init_db():
-    # Cria a tabela de vendas SE ELA NÃO EXISTIR (Preserva dados antigos)
+    # Garante que a tabela de vendas existe
     run_query("""
         CREATE TABLE IF NOT EXISTS vendas (
             id SERIAL PRIMARY KEY,
@@ -128,35 +78,46 @@ def init_db():
             valor NUMERIC(10,2)
         );
     """)
-    # Cria a tabela de usuários SE ELA NÃO EXISTIR
-    run_query("""
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY, 
-            password TEXT,
-            role TEXT
-        );
-    """)
+
+# --- LÓGICA DE AUTENTICAÇÃO INTELIGENTE ---
+def formatar_login(input_user):
+    """
+    Se o usuário digitar 'Christian', vira 'christian@starbank.com.br'
+    Se digitar 'christian@gmail.com', bloqueia.
+    """
+    input_user = input_user.strip().lower()
+    if "@" in input_user:
+        if "@starbank" in input_user: # Aceita variações como .com ou .com.br
+            return input_user
+        else:
+            return None # Email inválido
+    else:
+        # Se digitou só nome, cria o email fake institucional
+        return f"{input_user.replace(' ', '.')}@starbank.com.br"
+
+def login_supabase(email_input, password):
+    email_real = formatar_login(email_input)
+    if not email_real:
+        return None, "❌ Use um email @starbank ou apenas seu Nome."
     
-    # Cria supervisores padrão (se não existirem)
-    supervisores = ["Maicon Nascimento", "Brunno Leonard", "Fernanda Gomes", "Nair Oliveira"]
-    senha_padrao = hashlib.sha256(str.encode("123456")).hexdigest()
+    try:
+        # Tenta logar usando a API de Auth do Supabase
+        response = supabase.auth.sign_in_with_password({"email": email_real, "password": password})
+        return response.user, None
+    except Exception as e:
+        return None, "Usuário ou senha incorretos."
+
+def create_user_supabase(email_input, password):
+    email_real = formatar_login(email_input)
+    if not email_real:
+        return "❌ Permitido apenas para equipe Starbank (@starbank)."
     
-    for chefe in supervisores:
-        run_query("INSERT INTO users (username, password, role) VALUES (%s, %s, %s) ON CONFLICT (username) DO NOTHING", 
-                  (chefe, senha_padrao, 'admin'))
-        # Garante que sejam admin mesmo se já existiam
-        run_query("UPDATE users SET role = %s WHERE username = %s", ('admin', chefe))
-
-# --- SEGURANÇA ---
-def make_hashes(password):
-    return hashlib.sha256(str.encode(password)).hexdigest()
-
-def generate_session_token(username):
-    secret = "STARBANK_FIXED_UI_2026"
-    return hashlib.sha256(str.encode(username + secret)).hexdigest()
-
-def update_password(username, new_password):
-    run_query("UPDATE users SET password = %s WHERE username = %s", (make_hashes(new_password), username))
+    try:
+        # Cria usuário no painel Authentication
+        supabase.auth.sign_up({"email": email_real, "password": password})
+        return "✅ Usuário criado! Pode fazer login."
+    except Exception as e:
+        return f"Erro ao criar: {str(e)}"
 
 # --- LÓGICA DE METAS E COMISSÃO ---
 def calcular_comissao_tier(total):
@@ -181,48 +142,38 @@ def get_motivational_data(total):
     else: return "BRONZE", "#cd7f32", "Acelere para ativar a comissão nos 50k!", "🥉"
 
 def get_streak(username):
-    res = run_query("SELECT DISTINCT data FROM vendas WHERE username = %s ORDER BY data DESC", (username,))
+    # Extrai o nome do email para buscar no banco de dados antigo
+    nome_busca = username.split('@')[0].replace('.', ' ')
+    res = run_query(f"SELECT DISTINCT data FROM vendas WHERE username ILIKE '{nome_busca}%' ORDER BY data DESC")
     if not res: return 0
     return len(res)
 
-def get_total_sales_count():
-    res = run_query("SELECT COUNT(*) FROM vendas")
-    return res[0][0] if res else 0
-
-# --- LÓGICA DO TICKER (LIVE) ---
 def get_global_ticker_data():
     res = run_query("SELECT username, SUM(valor) as total FROM vendas GROUP BY username HAVING SUM(valor) >= 50000 ORDER BY total DESC")
-    
     if not res: return ["🚀 A CORRIDA PELOS 50K ESTÁ ON! BORA VENDER!"]
-    
     msgs = []
     for row in res:
-        user_nome = row[0].split()[0].upper()
+        # Limpa o nome (remove email se houver)
+        user_nome = row[0].split('@')[0].replace('.', ' ').upper()
         total_user = float(row[1]) 
-        
         if total_user >= 150000: msgs.append(f"💎 {user_nome} BATEU A META DE 150 MIL!")
         elif total_user >= 101000: msgs.append(f"💠 {user_nome} BATEU A META DE 101 MIL!")
         elif total_user >= 80000: msgs.append(f"🥇 {user_nome} BATEU A META DE 80 MIL!")
         elif total_user >= 50000: msgs.append(f"🥈 {user_nome} BATEU A META DE 50 MIL!")
-            
     return msgs
 
-# --- FUNÇÕES BÁSICAS ---
-def login_user(username, password):
-    return run_query("SELECT * FROM users WHERE username = %s AND password = %s", (username, make_hashes(password)))
-
-def create_user(username, password, role='operador'):
-    run_query("INSERT INTO users(username, password, role) VALUES (%s, %s, %s)", (username, make_hashes(password), role))
-
 def add_venda(username, data, cliente, convenio, produto, valor):
+    # Salva usando o nome limpo (Ex: christian.serello) para ficar bonito no banco
+    nome_banco = username.split('@')[0].replace('.', ' ').title()
     run_query("INSERT INTO vendas(username, data, cliente, convenio, produto, valor) VALUES (%s, %s, %s, %s, %s, %s)", 
-              (username, str(data), cliente, convenio, produto, valor))
+              (nome_banco, str(data), cliente, convenio, produto, valor))
 
 def delete_venda(venda_id):
     run_query("DELETE FROM vendas WHERE id = %s", (venda_id,))
 
 def get_all_users():
-    res = run_query("SELECT username FROM users")
+    # Busca usuários que já venderam alguma vez
+    res = run_query("SELECT DISTINCT username FROM vendas")
     return [r[0] for r in res] if res else []
 
 def get_vendas_df(target_user=None):
@@ -230,7 +181,9 @@ def get_vendas_df(target_user=None):
     if conn:
         query = "SELECT id, username, data, cliente, convenio, produto, valor FROM vendas"
         if target_user and target_user != "Todos":
-            df = pd.read_sql(query + " WHERE username = %s", conn, params=(target_user,))
+            # Filtro ILIKE para pegar variações de nome
+            nome_filtro = target_user.split('@')[0].replace('.', ' ')
+            df = pd.read_sql(query + f" WHERE username ILIKE '%%{nome_filtro}%%'", conn)
         else:
             df = pd.read_sql(query, conn)
         conn.close()
@@ -242,221 +195,159 @@ init_db()
 
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
-    st.session_state['username'] = ''
+    st.session_state['user_email'] = ''
 
 if 'ultimo_nivel_comemorado' not in st.session_state:
     st.session_state['ultimo_nivel_comemorado'] = 0
 
-qp = st.query_params
-if not st.session_state['logged_in'] and "user" in qp and "token" in qp:
-    if qp["token"] == generate_session_token(qp["user"]):
-        res = run_query("SELECT role FROM users WHERE username = %s", (qp["user"],))
-        role = res[0][0] if res else 'operador'
-        st.session_state['logged_in'] = True
-        st.session_state['username'] = qp["user"]
-        st.session_state['role'] = role
-
 # --- TELA DE LOGIN ---
 if not st.session_state['logged_in']:
-    st.markdown("""
-        <style>
-            .stApp { background: linear-gradient(-45deg, #020024, #090979, #00d4ff, #7b1fa2); background-size: 400% 400%; animation: gradientBG 15s ease infinite; }
-            @keyframes gradientBG { 0% {background-position: 0% 50%;} 50% {background-position: 100% 50%;} 100% {background-position: 0% 50%;} }
-            .holo-container {
-                background: rgba(255, 255, 255, 0.05); border-radius: 20px; padding: 50px;
-                backdrop-filter: blur(20px); border: 2px solid rgba(0, 212, 255, 0.3); box-shadow: 0 0 80px rgba(0, 212, 255, 0.2);
-                text-align: center; position: relative; overflow: hidden;
-            }
-            .holo-container::before {
-                content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%;
-                background: linear-gradient(to bottom, transparent, rgba(0, 212, 255, 0.4), transparent);
-                transform: rotate(45deg); animation: scanner 6s linear infinite; pointer-events: none;
-            }
-            @keyframes scanner { 0% {top: -200%;} 100% {top: 200%;} }
-            div[data-testid="stTextInput"] input {
-                background: transparent !important; border: none !important; border-bottom: 2px solid rgba(255,255,255,0.2) !important; color: white !important;
-            }
-            div[data-testid="stTextInput"] input:focus { border-bottom-color: #00d4ff !important; }
-        </style>
-    """, unsafe_allow_html=True)
-    
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.markdown('<div class="holo-container">', unsafe_allow_html=True)
         st.markdown('<h1 style="color:white; font-family: Rajdhani; letter-spacing: 3px;">STARBANK</h1>', unsafe_allow_html=True)
-        st.markdown('<p style="color:#00d4ff;">/// Acesso Seguro v13.0 ///</p>', unsafe_allow_html=True)
+        st.markdown('<p style="color:#00d4ff;">/// Acesso Seguro v14.0 ///</p>', unsafe_allow_html=True)
         
         tab1, tab2 = st.tabs(["ENTRAR", "REGISTRAR"])
         with tab1:
-            u = st.text_input("ID OPERADOR", key="l_u")
-            p = st.text_input("CHAVE DE ACESSO", type="password", key="l_p")
-            if st.button("INICIAR CONEXÃO >>>", type="primary"):
-                res = login_user(u, p)
-                if res:
+            u = st.text_input("Usuário ou Email Starbank", key="l_u", placeholder="Ex: christian ou christian@starbank...")
+            p = st.text_input("Senha", type="password", key="l_p")
+            if st.button("CONECTAR >>>", type="primary"):
+                user, error = login_supabase(u, p)
+                if user:
                     st.session_state['logged_in'] = True
-                    st.session_state['username'] = u
-                    st.session_state['role'] = res[0][2] if res[0][2] else 'operador'
-                    st.query_params["user"] = u
-                    st.query_params["token"] = generate_session_token(u)
+                    st.session_state['user_email'] = user.email
+                    # Define cargo básico (no futuro pode vir do metadata do supabase)
+                    st.session_state['role'] = 'admin' if 'admin' in user.email else 'operador'
                     st.rerun()
-                else: st.error("Acesso Negado")
+                else: st.error(error)
         with tab2:
-            nu = st.text_input("Novo Usuário", key="n_u")
-            np = st.text_input("Nova Senha", type="password", key="n_p")
-            if st.button("CRIAR"):
-                try: create_user(nu, np); st.success("Criado! Faça login.")
-                except: st.error("Usuário já existe")
+            st.info("Crie seu acesso. Use seu nome (Ex: 'Ana Silva') ou email corporativo.")
+            nu = st.text_input("Seu Nome ou Email", key="n_u")
+            np = st.text_input("Crie uma Senha", type="password", key="n_p")
+            if st.button("CRIAR CONTA"):
+                msg = create_user_supabase(nu, np)
+                if "✅" in msg: st.success(msg)
+                else: st.error(msg)
         st.markdown('</div>', unsafe_allow_html=True)
 
 else:
-    # --- DASHBOARD LOGADO ---
-    user = st.session_state['username']
+    # --- DASHBOARD ---
+    user_email = st.session_state['user_email']
+    user_display = user_email.split('@')[0].replace('.', ' ').title() # Nome Bonito
     role = st.session_state['role']
 
     # TICKER
     ticker_msgs = get_global_ticker_data()
-    ticker_html = f"""<div class="ticker-wrap"><div class="ticker">{' &nbsp;&nbsp;&nbsp;&nbsp; /// &nbsp;&nbsp;&nbsp;&nbsp; '.join([f'<div class="ticker__item">{m}</div>' for m in ticker_msgs])}</div></div>"""
-    st.markdown(ticker_html, unsafe_allow_html=True)
+    st.markdown(f"""<div class="ticker-wrap"><div class="ticker">{' &nbsp;&nbsp;&nbsp;&nbsp; /// &nbsp;&nbsp;&nbsp;&nbsp; '.join([f'<div class="ticker__item">{m}</div>' for m in ticker_msgs])}</div></div>""", unsafe_allow_html=True)
 
-    # --- SIDEBAR ---
     with st.sidebar:
-        st.markdown(f"<h2 style='color: #00d4ff;'>👤 {user.upper()}</h2>", unsafe_allow_html=True)
-        st.caption(f"PERFIL: {role.upper()}")
-        menu = st.radio("NAVEGAÇÃO", ["Painel de Controle", "Segurança / Senha"])
+        st.markdown(f"<h2 style='color: #00d4ff;'>👤 {user_display}</h2>", unsafe_allow_html=True)
+        st.caption(f"ID: {user_email}")
+        
+        streak_count = get_streak(user_email)
+        st.markdown(f"""<div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; border: 1px solid #FF4500; margin-bottom: 20px;"><h3 style="margin:0; color: #FF4500; text-align: center;">🔥 DIAS ATIVOS: {streak_count}</h3></div>""", unsafe_allow_html=True)
+        
         st.divider()
-        streak_count = get_streak(user)
-        fire_color = "#FF4500" if streak_count > 0 else "#555"
-        st.markdown(f"""<div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; border: 1px solid {fire_color}; margin-bottom: 20px;"><h3 style="margin:0; color: {fire_color}; text-align: center;">🔥 DIAS ATIVOS: {streak_count}</h3></div>""", unsafe_allow_html=True)
-        if st.button("DESCONECTAR [X]"):
+        st.markdown("### 💠 NOVA TRANSAÇÃO")
+        with st.form("venda"):
+            d = st.date_input("DATA", date.today())
+            c = st.text_input("CLIENTE")
+            co = st.text_input("CONVÊNIO")
+            p = st.selectbox("PRODUTO", ["EMPRÉSTIMO", "CARTÃO RMC", "BENEFICIO"])
+            v = st.number_input("VALOR (R$)", min_value=0.0, value=None, placeholder="0.00")
+            
+            if st.form_submit_button("PROCESSAR DADOS 🚀"):
+                val_final = v if v is not None else 0.0
+                if val_final > 0:
+                    add_venda(user_email, d, c, co, p, val_final)
+                    st.toast("Salvo!", icon="💾")
+                    time.sleep(0.5)
+                    st.rerun()
+                else: st.warning("Digite um valor válido!")
+        
+        if st.button("SAIR"):
+            supabase.auth.sign_out()
             st.session_state['logged_in'] = False
-            st.query_params.clear()
             st.rerun()
 
-    # --- MENU: SEGURANÇA ---
-    if menu == "Segurança / Senha":
-        st.title("🔐 Atualização de Credenciais")
-        with st.form("senha_form"):
-            s1 = st.text_input("Nova Senha", type="password")
-            s2 = st.text_input("Confirmar Senha", type="password")
-            if st.form_submit_button("Atualizar Chave"):
-                if s1 == s2 and s1 != "":
-                    update_password(user, s1)
-                    st.success("Senha atualizada!")
-                else: st.error("Senhas não coincidem.")
+    # ÁREA PRINCIPAL
+    filtro = user_email
+    # Lógica simples de admin: se email contiver 'admin' ou for um dos chefes conhecidos
+    admins = ["maicon", "brunno", "fernanda", "nair"]
+    is_admin = any(x in user_email for x in admins)
+    
+    if is_admin:
+        col_admin, _ = st.columns([1, 3])
+        with col_admin:
+            op = ["Todos"] + get_all_users()
+            sel = st.selectbox("VISÃO SUPERVISOR:", op)
+            filtro = "Todos" if sel == "Todos" else sel
 
-    # --- MENU: PAINEL DE CONTROLE ---
-    elif menu == "Painel de Controle":
-        with st.sidebar:
-            st.divider()
-            st.markdown("### 💠 NOVA TRANSAÇÃO")
-            with st.form("venda"):
-                d = st.date_input("DATA", date.today())
-                c = st.text_input("CLIENTE")
-                co = st.text_input("CONVÊNIO")
-                p = st.selectbox("PRODUTO", ["EMPRÉSTIMO", "CARTÃO RMC", "BENEFICIO"])
-                
-                v = st.number_input("VALOR (R$)", min_value=0.0, value=None, placeholder="0.00")
-                
-                if st.form_submit_button("PROCESSAR DADOS 🚀"):
-                    val_final = v if v is not None else 0.0
-                    if val_final > 0:
-                        add_venda(user, d, c, co, p, val_final)
-                        st.toast("Salvo!", icon="💾")
-                        time.sleep(0.5)
-                        st.rerun()
-                    else:
-                        st.warning("Digite um valor válido!")
+    df = get_vendas_df(filtro)
+    
+    total = df['valor'].sum() if not df.empty else 0.0
+    META_ATUAL = definir_meta_atual(total)
+    comissao = calcular_comissao_tier(total)
+    nivel, cor_nivel, msg, icone = get_motivational_data(total)
 
-        filtro = user
-        if role == 'admin':
-            col_admin, _ = st.columns([1, 3])
-            with col_admin:
-                op = ["Todos"] + get_all_users()
-                sel = st.selectbox("VISÃO SUPERVISOR (ADMIN):", op)
-                filtro = "Todos" if sel == "Todos" else sel
+    st.markdown(f"""
+        <div class="cyber-banner" style="border-color: {cor_nivel}; box-shadow: 0 0 20px {cor_nivel}40;">
+            <h2 style="margin:0; color: white; letter-spacing: 2px;">{icone} STATUS: {filtro.split('@')[0].upper()}</h2>
+            <p style="margin:10px 0 0 0; color: {cor_nivel}; font-size: 1.3em; font-weight: bold; text-shadow: 0 0 10px {cor_nivel};">
+                NÍVEL: {nivel}
+            </p>
+            <p style="margin:0; color: #a0a0a0; font-style: italic;">/// {msg} ///</p>
+        </div>
+    """, unsafe_allow_html=True)
 
-        df = get_vendas_df(filtro)
-        
-        # --- CÁLCULOS DINÂMICOS ---
-        total = df['valor'].sum() if not df.empty else 0.0
-        META_ATUAL = definir_meta_atual(total)
-        comissao = calcular_comissao_tier(total)
-        nivel, cor_nivel, msg, icone = get_motivational_data(total)
+    col_prog, col_meta = st.columns([3, 1])
+    with col_prog:
+        progresso_pct = min(total / META_ATUAL, 1.0)
+        st.markdown(f"<br>Please **PRÓXIMO ALVO: R$ {META_ATUAL:,.2f} ({progresso_pct*100:.1f}%)**", unsafe_allow_html=True)
+        st.progress(progresso_pct)
 
-        # Banner
-        st.markdown(f"""
-            <div class="cyber-banner" style="border-color: {cor_nivel}; box-shadow: 0 0 20px {cor_nivel}40;">
-                <h2 style="margin:0; color: white; letter-spacing: 2px;">{icone} STATUS: {filtro.upper()}</h2>
-                <p style="margin:10px 0 0 0; color: {cor_nivel}; font-size: 1.3em; font-weight: bold; text-shadow: 0 0 10px {cor_nivel};">
-                    NÍVEL: {nivel}
-                </p>
-                <p style="margin:0; color: #a0a0a0; font-style: italic;">/// {msg} ///</p>
-            </div>
-        """, unsafe_allow_html=True)
+    # Balões (só na visão do dono)
+    if filtro == user_email:
+        novo_nivel = 0
+        if total >= 150000: novo_nivel = 150000
+        elif total >= 101000: novo_nivel = 101000
+        elif total >= 80000: novo_nivel = 80000
+        elif total >= 50000: novo_nivel = 50000
+        if novo_nivel > st.session_state['ultimo_nivel_comemorado']:
+            st.balloons()
+            st.toast(f"PARABÉNS! META DE {novo_nivel/1000:.0f}K BATIDA!", icon="🎉")
+            st.session_state['ultimo_nivel_comemorado'] = novo_nivel
 
-        # Barra de Progresso
-        col_prog, col_meta = st.columns([3, 1])
-        with col_prog:
-            progresso_pct = min(total / META_ATUAL, 1.0)
-            st.markdown(f"<br>Please **PRÓXIMO ALVO: R$ {META_ATUAL:,.2f} ({progresso_pct*100:.1f}%)**", unsafe_allow_html=True)
-            st.progress(progresso_pct)
-        with col_meta:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if total >= 150000: st.markdown("🏆 **LENDÁRIO!**")
-            elif total >= META_ATUAL: st.markdown("🚀 **SUBIU DE NÍVEL!**")
+    st.markdown("<br>", unsafe_allow_html=True)
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("VOLUME TOTAL", f"R$ {total:,.2f}", delta="Processado")
+    k2.metric("COMISSÃO", f"R$ {comissao:,.2f}", delta=f"{(comissao/total*100) if total>0 else 0:.2f}%")
+    k3.metric("FALTA", f"R$ {max(META_ATUAL-total, 0):,.2f}", delta_color="inverse")
+    k4.metric("META ATUAL", f"R$ {META_ATUAL:,.2f}")
 
-        # --- BALÕES ---
-        if filtro == user:
-            novo_nivel = 0
-            if total >= 150000: novo_nivel = 150000
-            elif total >= 101000: novo_nivel = 101000
-            elif total >= 80000: novo_nivel = 80000
-            elif total >= 50000: novo_nivel = 50000
-            
-            if novo_nivel > st.session_state['ultimo_nivel_comemorado']:
-                st.balloons()
-                st.toast(f"PARABÉNS! VOCÊ BATEU A META DE {novo_nivel/1000:.0f} MIL!", icon="🎉")
-                st.session_state['ultimo_nivel_comemorado'] = novo_nivel
+    st.divider()
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("VOLUME TOTAL", f"R$ {total:,.2f}", delta="Processado")
-        
-        perc_atual = (comissao/total*100) if total > 0 else 0
-        k2.metric("COMISSÃO APLICADA", f"R$ {comissao:,.2f}", delta=f"{perc_atual:.2f}%")
-        
-        k3.metric("FALTA P/ PRÓX. NÍVEL", f"R$ {max(META_ATUAL-total, 0):,.2f}", delta="Pendente", delta_color="inverse")
-        k4.metric("META ATUAL", f"R$ {META_ATUAL:,.2f}", delta="Alvo Dinâmico")
+    if not df.empty:
+        c_chart, c_table = st.columns([1.5, 1])
+        with c_chart:
+            st.markdown("#### 📈 FLUXO")
+            df['data'] = pd.to_datetime(df['data'])
+            st.area_chart(df.groupby("data")["valor"].sum(), color=cor_nivel)
+        with c_table:
+            st.markdown("#### ⚡ TOP VENDAS")
+            st.dataframe(df[['cliente', 'produto', 'valor']].sort_values(by='valor', ascending=False).head(5).style.format({"valor": "R$ {:,.2f}"}), use_container_width=True, hide_index=True)
 
-        st.divider()
-
-        if not df.empty:
-            c_chart, c_table = st.columns([1.5, 1])
-            with c_chart:
-                st.markdown("#### 📈 FLUXO TEMPORAL")
-                df['data'] = pd.to_datetime(df['data'])
-                chart_data = df.groupby("data")["valor"].sum()
-                st.area_chart(chart_data, color=cor_nivel)
-            
-            with c_table:
-                if role == 'admin' and filtro == "Todos":
-                    st.markdown("#### 🏆 RANKING GERAL (EQUIPE)")
-                    ranking = df.groupby('username')['valor'].sum().sort_values(ascending=False).reset_index()
-                    st.dataframe(ranking.style.format({"valor": "R$ {:,.2f}"}), use_container_width=True, hide_index=True)
-                else:
-                    st.markdown("#### ⚡ TOP 5 VENDAS")
-                    st.dataframe(df[['cliente', 'produto', 'valor']].sort_values(by='valor', ascending=False).head(5).style.format({"valor": "R$ {:,.2f}"}), use_container_width=True, hide_index=True)
-
-            with st.expander("📂 ACESSAR BANCO DE DADOS COMPLETO"):
-                st.dataframe(df.style.format({"valor": "R$ {:,.2f}"}), use_container_width=True)
-                col_del, _ = st.columns([1, 3])
-                with col_del:
-                    lista = df.apply(lambda x: f"ID {x['id']} - {x['cliente']} ({x['username']})", axis=1)
-                    sel = st.selectbox("SELECIONAR REGISTRO PARA EXPURGO:", lista)
-                    if st.button("🗑️ CONFIRMAR EXPURGO"):
-                        id_real = int(sel.split(" - ")[0].replace("ID ", ""))
-                        delete_venda(id_real)
-                        st.rerun()
-        else:
-            st.info("NENHUM DADO REGISTRADO NO PERÍODO.")
+        with st.expander("📂 ACESSAR BANCO DE DADOS COMPLETO"):
+            st.dataframe(df.style.format({"valor": "R$ {:,.2f}"}), use_container_width=True)
+            col_del, _ = st.columns([1, 3])
+            with col_del:
+                lista = df.apply(lambda x: f"ID {x['id']} - {x['cliente']}", axis=1)
+                sel = st.selectbox("EXCLUIR:", lista)
+                if st.button("🗑️ CONFIRMAR"):
+                    id_real = int(sel.split(" - ")[0].replace("ID ", ""))
+                    delete_venda(id_real)
+                    st.rerun()
+    else:
+        st.info("NENHUM DADO REGISTRADO.")
