@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
+import psycopg2
 import hashlib
 import time
-from datetime import date, timedelta
+from datetime import date
 
 # Config. da pagina
 st.set_page_config(
@@ -13,20 +13,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CSS CYBER ---
+# --- CSS CYBER (Mantido) ---
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Inter:wght@300;400;600&display=swap');
-        
         .stAppDeployButton { display: none; }
-        
-        header[data-testid="stHeader"] {
-            background-color: transparent !important;
-        }
-
+        header[data-testid="stHeader"] { background-color: transparent !important; }
         button[kind="header"] { color: #00d4ff !important; }
         [data-testid="collapsedControl"] { color: #00d4ff !important; }
-
         html, body, [class*="css"] { font-family: 'Rajdhani', sans-serif; }
         
         /* --- TICKER (LIVE) --- */
@@ -95,52 +89,63 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- FUNÇÕES DE BANCO DE DADOS ---
+# --- CONEXÃO COM O SUPABASE (PostgreSQL) ---
+# Esta função usa st.secrets. Certifique-se de configurar os Secrets no painel do Streamlit.
+@st.cache_resource
 def init_connection():
-    return sqlite3.connect('vendas.db', check_same_thread=False)
+    try:
+        return psycopg2.connect(**st.secrets["connections"]["postgresql"])
+    except Exception as e:
+        return None
 
 def run_query(query, params=None):
     conn = init_connection()
-    with conn:
-        if params:
-            res = conn.execute(query, params)
-        else:
-            res = conn.execute(query)
-        
-        if query.strip().upper().startswith("SELECT"):
-            return res.fetchall()
-        return None
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                conn.commit()
+                if query.strip().upper().startswith("SELECT"):
+                    return cur.fetchall()
+                return None
+        except Exception as e:
+            st.error(f"Erro de conexão: {e}")
+            return None
+        finally:
+            conn.close()
+    return None
 
 def init_db():
-    conn = init_connection()
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS vendas (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT,
-                    data TEXT,
-                    cliente TEXT,
-                    convenio TEXT,
-                    produto TEXT,
-                    valor REAL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-                    username TEXT PRIMARY KEY, 
-                    password TEXT)''')
-    try:
-        c.execute("ALTER TABLE users ADD COLUMN role TEXT")
-        c.execute("UPDATE users SET role = 'operador' WHERE role IS NULL")
-        conn.commit()
-    except sqlite3.OperationalError: pass
-
+    # Cria a tabela de vendas SE ELA NÃO EXISTIR (Preserva dados antigos)
+    run_query("""
+        CREATE TABLE IF NOT EXISTS vendas (
+            id SERIAL PRIMARY KEY,
+            username TEXT,
+            data DATE,
+            cliente TEXT,
+            convenio TEXT,
+            produto TEXT,
+            valor NUMERIC(10,2)
+        );
+    """)
+    # Cria a tabela de usuários SE ELA NÃO EXISTIR
+    run_query("""
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY, 
+            password TEXT,
+            role TEXT
+        );
+    """)
+    
+    # Cria supervisores padrão (se não existirem)
     supervisores = ["Maicon Nascimento", "Brunno Leonard", "Fernanda Gomes", "Nair Oliveira"]
     senha_padrao = hashlib.sha256(str.encode("123456")).hexdigest()
+    
     for chefe in supervisores:
-        try:
-            c.execute('INSERT OR IGNORE INTO users(username, password, role) VALUES (?,?,?)', 
-                      (chefe, senha_padrao, 'admin'))
-            c.execute('UPDATE users SET role = ? WHERE username = ?', ('admin', chefe))
-        except Exception: pass
-    conn.commit()
-    conn.close()
+        run_query("INSERT INTO users (username, password, role) VALUES (%s, %s, %s) ON CONFLICT (username) DO NOTHING", 
+                  (chefe, senha_padrao, 'admin'))
+        # Garante que sejam admin mesmo se já existiam
+        run_query("UPDATE users SET role = %s WHERE username = %s", ('admin', chefe))
 
 # --- SEGURANÇA ---
 def make_hashes(password):
@@ -151,7 +156,7 @@ def generate_session_token(username):
     return hashlib.sha256(str.encode(username + secret)).hexdigest()
 
 def update_password(username, new_password):
-    run_query("UPDATE users SET password = ? WHERE username = ?", (make_hashes(new_password), username))
+    run_query("UPDATE users SET password = %s WHERE username = %s", (make_hashes(new_password), username))
 
 # --- LÓGICA DE METAS E COMISSÃO ---
 def calcular_comissao_tier(total):
@@ -176,7 +181,7 @@ def get_motivational_data(total):
     else: return "BRONZE", "#cd7f32", "Acelere para ativar a comissão nos 50k!", "🥉"
 
 def get_streak(username):
-    res = run_query("SELECT DISTINCT data FROM vendas WHERE username = ? ORDER BY data DESC", (username,))
+    res = run_query("SELECT DISTINCT data FROM vendas WHERE username = %s ORDER BY data DESC", (username,))
     if not res: return 0
     return len(res)
 
@@ -184,43 +189,37 @@ def get_total_sales_count():
     res = run_query("SELECT COUNT(*) FROM vendas")
     return res[0][0] if res else 0
 
-# --- LÓGICA DO TICKER ATUALIZADA (SOMENTE METAS) ---
+# --- LÓGICA DO TICKER (LIVE) ---
 def get_global_ticker_data():
-    # Pega a soma TOTAL por usuário (apenas quem já passou dos 50k)
-    res = run_query("SELECT username, SUM(valor) as total FROM vendas GROUP BY username HAVING total >= 50000 ORDER BY total DESC")
+    res = run_query("SELECT username, SUM(valor) as total FROM vendas GROUP BY username HAVING SUM(valor) >= 50000 ORDER BY total DESC")
     
     if not res: return ["🚀 A CORRIDA PELOS 50K ESTÁ ON! BORA VENDER!"]
     
     msgs = []
     for row in res:
-        user_nome = row[0].split()[0].upper() # Apenas o primeiro nome
-        total_user = row[1]
+        user_nome = row[0].split()[0].upper()
+        total_user = float(row[1]) 
         
-        # Gera apenas a mensagem da MAIOR meta atingida
-        if total_user >= 150000:
-            msgs.append(f"💎 {user_nome} BATEU A META DE 150 MIL!")
-        elif total_user >= 101000:
-            msgs.append(f"💠 {user_nome} BATEU A META DE 101 MIL!")
-        elif total_user >= 80000:
-            msgs.append(f"🥇 {user_nome} BATEU A META DE 80 MIL!")
-        elif total_user >= 50000:
-            msgs.append(f"🥈 {user_nome} BATEU A META DE 50 MIL!")
+        if total_user >= 150000: msgs.append(f"💎 {user_nome} BATEU A META DE 150 MIL!")
+        elif total_user >= 101000: msgs.append(f"💠 {user_nome} BATEU A META DE 101 MIL!")
+        elif total_user >= 80000: msgs.append(f"🥇 {user_nome} BATEU A META DE 80 MIL!")
+        elif total_user >= 50000: msgs.append(f"🥈 {user_nome} BATEU A META DE 50 MIL!")
             
     return msgs
 
 # --- FUNÇÕES BÁSICAS ---
 def login_user(username, password):
-    return run_query("SELECT * FROM users WHERE username = ? AND password = ?", (username, make_hashes(password)))
+    return run_query("SELECT * FROM users WHERE username = %s AND password = %s", (username, make_hashes(password)))
 
 def create_user(username, password, role='operador'):
-    run_query("INSERT INTO users(username, password, role) VALUES (?, ?, ?)", (username, make_hashes(password), role))
+    run_query("INSERT INTO users(username, password, role) VALUES (%s, %s, %s)", (username, make_hashes(password), role))
 
 def add_venda(username, data, cliente, convenio, produto, valor):
-    run_query("INSERT INTO vendas(username, data, cliente, convenio, produto, valor) VALUES (?, ?, ?, ?, ?, ?)", 
+    run_query("INSERT INTO vendas(username, data, cliente, convenio, produto, valor) VALUES (%s, %s, %s, %s, %s, %s)", 
               (username, str(data), cliente, convenio, produto, valor))
 
 def delete_venda(venda_id):
-    run_query("DELETE FROM vendas WHERE id = ?", (venda_id,))
+    run_query("DELETE FROM vendas WHERE id = %s", (venda_id,))
 
 def get_all_users():
     res = run_query("SELECT username FROM users")
@@ -228,13 +227,15 @@ def get_all_users():
 
 def get_vendas_df(target_user=None):
     conn = init_connection()
-    query = "SELECT id, username, data, cliente, convenio, produto, valor FROM vendas"
-    if target_user and target_user != "Todos":
-        df = pd.read_sql(query + " WHERE username = ?", conn, params=(target_user,))
-    else:
-        df = pd.read_sql(query, conn)
-    conn.close()
-    return df
+    if conn:
+        query = "SELECT id, username, data, cliente, convenio, produto, valor FROM vendas"
+        if target_user and target_user != "Todos":
+            df = pd.read_sql(query + " WHERE username = %s", conn, params=(target_user,))
+        else:
+            df = pd.read_sql(query, conn)
+        conn.close()
+        return df
+    return pd.DataFrame()
 
 # --- INICIALIZAÇÃO ---
 init_db()
@@ -243,14 +244,13 @@ if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
     st.session_state['username'] = ''
 
-# Controle para balões não repetirem
 if 'ultimo_nivel_comemorado' not in st.session_state:
     st.session_state['ultimo_nivel_comemorado'] = 0
 
 qp = st.query_params
 if not st.session_state['logged_in'] and "user" in qp and "token" in qp:
     if qp["token"] == generate_session_token(qp["user"]):
-        res = run_query("SELECT role FROM users WHERE username = ?", (qp["user"],))
+        res = run_query("SELECT role FROM users WHERE username = %s", (qp["user"],))
         role = res[0][0] if res else 'operador'
         st.session_state['logged_in'] = True
         st.session_state['username'] = qp["user"]
@@ -285,7 +285,7 @@ if not st.session_state['logged_in']:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.markdown('<div class="holo-container">', unsafe_allow_html=True)
         st.markdown('<h1 style="color:white; font-family: Rajdhani; letter-spacing: 3px;">STARBANK</h1>', unsafe_allow_html=True)
-        st.markdown('<p style="color:#00d4ff;">/// Acesso Seguro v11.0 ///</p>', unsafe_allow_html=True)
+        st.markdown('<p style="color:#00d4ff;">/// Acesso Seguro v13.0 ///</p>', unsafe_allow_html=True)
         
         tab1, tab2 = st.tabs(["ENTRAR", "REGISTRAR"])
         with tab1:
@@ -314,7 +314,7 @@ else:
     user = st.session_state['username']
     role = st.session_state['role']
 
-    # TICKER (Live de Metas)
+    # TICKER
     ticker_msgs = get_global_ticker_data()
     ticker_html = f"""<div class="ticker-wrap"><div class="ticker">{' &nbsp;&nbsp;&nbsp;&nbsp; /// &nbsp;&nbsp;&nbsp;&nbsp; '.join([f'<div class="ticker__item">{m}</div>' for m in ticker_msgs])}</div></div>"""
     st.markdown(ticker_html, unsafe_allow_html=True)
@@ -333,7 +333,7 @@ else:
             st.query_params.clear()
             st.rerun()
 
-    # --- MENU: SEGURANÇA
+    # --- MENU: SEGURANÇA ---
     if menu == "Segurança / Senha":
         st.title("🔐 Atualização de Credenciais")
         with st.form("senha_form"):
@@ -356,15 +356,10 @@ else:
                 co = st.text_input("CONVÊNIO")
                 p = st.selectbox("PRODUTO", ["EMPRÉSTIMO", "CARTÃO RMC", "BENEFICIO"])
                 
-                # --- AQUI ESTÁ A CORREÇÃO DO VALOR 0.00 ---
-                # value=None faz o campo nascer "vazio"
-                # placeholder="0.00" mostra o fantasma do zero
                 v = st.number_input("VALOR (R$)", min_value=0.0, value=None, placeholder="0.00")
                 
                 if st.form_submit_button("PROCESSAR DADOS 🚀"):
-                    # Se o usuário não digitar nada (None), assume 0.0
                     val_final = v if v is not None else 0.0
-                    
                     if val_final > 0:
                         add_venda(user, d, c, co, p, val_final)
                         st.toast("Salvo!", icon="💾")
@@ -411,7 +406,7 @@ else:
             if total >= 150000: st.markdown("🏆 **LENDÁRIO!**")
             elif total >= META_ATUAL: st.markdown("🚀 **SUBIU DE NÍVEL!**")
 
-        # --- BALÕES APENAS QUANDO ATINGE NOVA META ---
+        # --- BALÕES ---
         if filtro == user:
             novo_nivel = 0
             if total >= 150000: novo_nivel = 150000
@@ -419,7 +414,6 @@ else:
             elif total >= 80000: novo_nivel = 80000
             elif total >= 50000: novo_nivel = 50000
             
-            # Se o nível atual for MAIOR que o último comemorado, solta balão
             if novo_nivel > st.session_state['ultimo_nivel_comemorado']:
                 st.balloons()
                 st.toast(f"PARABÉNS! VOCÊ BATEU A META DE {novo_nivel/1000:.0f} MIL!", icon="🎉")
