@@ -5,7 +5,7 @@ import hashlib
 import time
 from datetime import date, timedelta
 
-#Config. da pagina
+# Config. da pagina
 st.set_page_config(
     page_title="Starbank Vendas",
     page_icon="💠",
@@ -13,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-#css cyber
+# --- CSS CYBER ---
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Inter:wght@300;400;600&display=swap');
@@ -29,16 +29,16 @@ st.markdown("""
 
         html, body, [class*="css"] { font-family: 'Rajdhani', sans-serif; }
         
-        /* --- TICKER --- */
+        /* --- TICKER (LIVE) --- */
         .ticker-wrap {
             width: 100%; overflow: hidden; background-color: rgba(0, 0, 0, 0.6);
             border-bottom: 1px solid #00d4ff; border-top: 1px solid #00d4ff;
             padding: 10px 0; white-space: nowrap; box-sizing: border-box; margin-bottom: 20px;
         }
-        .ticker { display: inline-block; padding-left: 100%; animation: ticker-anim 20s linear infinite; }
+        .ticker { display: inline-block; padding-left: 100%; animation: ticker-anim 30s linear infinite; } 
         .ticker__item {
             display: inline-block; padding: 0 2rem; font-size: 1.2rem;
-            color: #00ff41; font-weight: bold; text-shadow: 0 0 5px #00ff41;
+            color: #FFFFFF; font-weight: bold; text-shadow: 0 0 5px #00ff41;
         }
         @keyframes ticker-anim { 0% { transform: translate3d(0, 0, 0); } 100% { transform: translate3d(-100%, 0, 0); } }
 
@@ -49,7 +49,7 @@ st.markdown("""
         div[data-testid="stMetric"] { animation: slideInUp 0.6s ease-out 0.4s both; }
         .stChart, .stDataFrame { animation: slideInUp 0.8s ease-out 0.6s both; }
 
-        /* --- BACKGROUND --- */
+        /*BACKGROUND*/
         .stApp {
             background: linear-gradient(to bottom, #02010a, #090a1f);
             background-size: 200% 200%; animation: darkPulse 10s ease infinite;
@@ -95,7 +95,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-#banco de dados
+# --- FUNÇÕES DE BANCO DE DADOS ---
 def init_connection():
     return sqlite3.connect('vendas.db', check_same_thread=False)
 
@@ -142,7 +142,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-#segurança
+# --- SEGURANÇA ---
 def make_hashes(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
@@ -153,28 +153,22 @@ def generate_session_token(username):
 def update_password(username, new_password):
     run_query("UPDATE users SET password = ? WHERE username = ?", (make_hashes(new_password), username))
 
-# logica de metas e comissões
+# --- LÓGICA DE METAS E COMISSÃO ---
 def calcular_comissao_tier(total):
-    # A partir de 150k -> 1.50%
     if total >= 150000: return total * 0.0150 
-    # A partir de 101k -> 1.25%
     elif total >= 101000: return total * 0.0125 
-    # A partir de 80k -> 1.00%
     elif total >= 80000: return total * 0.0100 
-    # A partir de 50k -> 0.50%
     elif total >= 50000: return total * 0.0050 
     else: return 0.0
 
 def definir_meta_atual(total):
-    #definhe qual barra o operador esta 
     if total < 50000: return 50000.00
     elif total < 80000: return 80000.00
     elif total < 101000: return 101000.00
     elif total < 150000: return 150000.00
-    else: return 200000.00 # Meta simbólica "Sem Limites" para o gráfico não quebrar
+    else: return 200000.00
 
 def get_motivational_data(total):
-    # de acordo com a tabela de comissão
     if total >= 150000: return "DIAMANTE (MAX)", "#b9f2ff", "LENDÁRIO! COMISSÃO MÁXIMA DE 1.5%", "💎"
     elif total >= 101000: return "PLATINA", "#E5E4E2", "EXCELENTE! COMISSÃO DE 1.25%", "💠"
     elif total >= 80000: return "OURO", "#FFD700", "MUITO BEM! COMISSÃO DE 1.00%", "🥇"
@@ -190,16 +184,31 @@ def get_total_sales_count():
     res = run_query("SELECT COUNT(*) FROM vendas")
     return res[0][0] if res else 0
 
+# --- LÓGICA DO TICKER ATUALIZADA (SOMENTE METAS) ---
 def get_global_ticker_data():
-    res = run_query("SELECT username, valor, produto FROM vendas ORDER BY id DESC LIMIT 5")
-    if not res: return ["💎 Sistema Starbank Online"]
+    # Pega a soma TOTAL por usuário (apenas quem já passou dos 50k)
+    res = run_query("SELECT username, SUM(valor) as total FROM vendas GROUP BY username HAVING total >= 50000 ORDER BY total DESC")
+    
+    if not res: return ["🚀 A CORRIDA PELOS 50K ESTÁ ON! BORA VENDER!"]
+    
     msgs = []
     for row in res:
-        user_short = row[0].split()[0]
-        msgs.append(f"⚡ LIVE: {user_short.upper()} VENDEU R$ {row[1]:,.2f} ({row[2]})")
-    msgs.append("🚀 FOCO NA PRÓXIMA META!")
+        user_nome = row[0].split()[0].upper() # Apenas o primeiro nome
+        total_user = row[1]
+        
+        # Gera apenas a mensagem da MAIOR meta atingida
+        if total_user >= 150000:
+            msgs.append(f"💎 {user_nome} BATEU A META DE 150 MIL!")
+        elif total_user >= 101000:
+            msgs.append(f"💠 {user_nome} BATEU A META DE 101 MIL!")
+        elif total_user >= 80000:
+            msgs.append(f"🥇 {user_nome} BATEU A META DE 80 MIL!")
+        elif total_user >= 50000:
+            msgs.append(f"🥈 {user_nome} BATEU A META DE 50 MIL!")
+            
     return msgs
 
+# --- FUNÇÕES BÁSICAS ---
 def login_user(username, password):
     return run_query("SELECT * FROM users WHERE username = ? AND password = ?", (username, make_hashes(password)))
 
@@ -227,12 +236,16 @@ def get_vendas_df(target_user=None):
     conn.close()
     return df
 
-#iniciando login 
+# --- INICIALIZAÇÃO ---
 init_db()
 
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
     st.session_state['username'] = ''
+
+# Controle para balões não repetirem
+if 'ultimo_nivel_comemorado' not in st.session_state:
+    st.session_state['ultimo_nivel_comemorado'] = 0
 
 qp = st.query_params
 if not st.session_state['logged_in'] and "user" in qp and "token" in qp:
@@ -272,7 +285,7 @@ if not st.session_state['logged_in']:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.markdown('<div class="holo-container">', unsafe_allow_html=True)
         st.markdown('<h1 style="color:white; font-family: Rajdhani; letter-spacing: 3px;">STARBANK</h1>', unsafe_allow_html=True)
-        st.markdown('<p style="color:#00d4ff;">/// Acesso Seguro v10.0 ///</p>', unsafe_allow_html=True)
+        st.markdown('<p style="color:#00d4ff;">/// Acesso Seguro v11.0 ///</p>', unsafe_allow_html=True)
         
         tab1, tab2 = st.tabs(["ENTRAR", "REGISTRAR"])
         with tab1:
@@ -301,14 +314,10 @@ else:
     user = st.session_state['username']
     role = st.session_state['role']
 
-    # TICKER
-    if 'last_sales_count' not in st.session_state: st.session_state['last_sales_count'] = 0
-    current_sales_count = get_total_sales_count()
-    if current_sales_count > st.session_state['last_sales_count']:
-        ticker_msgs = get_global_ticker_data()
-        ticker_html = f"""<div class="ticker-wrap"><div class="ticker">{' &nbsp;&nbsp;&nbsp;&nbsp; /// &nbsp;&nbsp;&nbsp;&nbsp; '.join([f'<div class="ticker__item">{m}</div>' for m in ticker_msgs])}</div></div>"""
-        st.markdown(ticker_html, unsafe_allow_html=True)
-        st.session_state['last_sales_count'] = current_sales_count
+    # TICKER (Live de Metas)
+    ticker_msgs = get_global_ticker_data()
+    ticker_html = f"""<div class="ticker-wrap"><div class="ticker">{' &nbsp;&nbsp;&nbsp;&nbsp; /// &nbsp;&nbsp;&nbsp;&nbsp; '.join([f'<div class="ticker__item">{m}</div>' for m in ticker_msgs])}</div></div>"""
+    st.markdown(ticker_html, unsafe_allow_html=True)
 
     # --- SIDEBAR ---
     with st.sidebar:
@@ -324,7 +333,7 @@ else:
             st.query_params.clear()
             st.rerun()
 
-    # --- MENU: SEGURANÇA ---
+    # --- MENU: SEGURANÇA
     if menu == "Segurança / Senha":
         st.title("🔐 Atualização de Credenciais")
         with st.form("senha_form"):
@@ -346,12 +355,23 @@ else:
                 c = st.text_input("CLIENTE")
                 co = st.text_input("CONVÊNIO")
                 p = st.selectbox("PRODUTO", ["EMPRÉSTIMO", "CARTÃO RMC", "BENEFICIO"])
-                v = st.number_input("VALOR (R$)", min_value=0.0)
+                
+                # --- AQUI ESTÁ A CORREÇÃO DO VALOR 0.00 ---
+                # value=None faz o campo nascer "vazio"
+                # placeholder="0.00" mostra o fantasma do zero
+                v = st.number_input("VALOR (R$)", min_value=0.0, value=None, placeholder="0.00")
+                
                 if st.form_submit_button("PROCESSAR DADOS 🚀"):
-                    add_venda(user, d, c, co, p, v)
-                    st.toast("Salvo!", icon="💾")
-                    time.sleep(0.5)
-                    st.rerun()
+                    # Se o usuário não digitar nada (None), assume 0.0
+                    val_final = v if v is not None else 0.0
+                    
+                    if val_final > 0:
+                        add_venda(user, d, c, co, p, val_final)
+                        st.toast("Salvo!", icon="💾")
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.warning("Digite um valor válido!")
 
         filtro = user
         if role == 'admin':
@@ -365,10 +385,7 @@ else:
         
         # --- CÁLCULOS DINÂMICOS ---
         total = df['valor'].sum() if not df.empty else 0.0
-        
-        # Define a META VISUAL baseado no total vendido (Gamification)
         META_ATUAL = definir_meta_atual(total)
-        
         comissao = calcular_comissao_tier(total)
         nivel, cor_nivel, msg, icone = get_motivational_data(total)
 
@@ -383,7 +400,7 @@ else:
             </div>
         """, unsafe_allow_html=True)
 
-        #barra de progresso de acordo com a meta
+        # Barra de Progresso
         col_prog, col_meta = st.columns([3, 1])
         with col_prog:
             progresso_pct = min(total / META_ATUAL, 1.0)
@@ -394,7 +411,19 @@ else:
             if total >= 150000: st.markdown("🏆 **LENDÁRIO!**")
             elif total >= META_ATUAL: st.markdown("🚀 **SUBIU DE NÍVEL!**")
 
-        if total >= META_ATUAL and filtro == user and total < 200000: st.balloons()
+        # --- BALÕES APENAS QUANDO ATINGE NOVA META ---
+        if filtro == user:
+            novo_nivel = 0
+            if total >= 150000: novo_nivel = 150000
+            elif total >= 101000: novo_nivel = 101000
+            elif total >= 80000: novo_nivel = 80000
+            elif total >= 50000: novo_nivel = 50000
+            
+            # Se o nível atual for MAIOR que o último comemorado, solta balão
+            if novo_nivel > st.session_state['ultimo_nivel_comemorado']:
+                st.balloons()
+                st.toast(f"PARABÉNS! VOCÊ BATEU A META DE {novo_nivel/1000:.0f} MIL!", icon="🎉")
+                st.session_state['ultimo_nivel_comemorado'] = novo_nivel
 
         st.markdown("<br>", unsafe_allow_html=True)
         k1, k2, k3, k4 = st.columns(4)
@@ -403,7 +432,6 @@ else:
         perc_atual = (comissao/total*100) if total > 0 else 0
         k2.metric("COMISSÃO APLICADA", f"R$ {comissao:,.2f}", delta=f"{perc_atual:.2f}%")
         
-        # Mostra quanto falta para a PRÓXIMA meta da escada
         k3.metric("FALTA P/ PRÓX. NÍVEL", f"R$ {max(META_ATUAL-total, 0):,.2f}", delta="Pendente", delta_color="inverse")
         k4.metric("META ATUAL", f"R$ {META_ATUAL:,.2f}", delta="Alvo Dinâmico")
 
